@@ -46,7 +46,26 @@ Cả hai đúng là ảnh trùng; ngưỡng khởi đầu 2 sẽ bỏ sót cả 
 4. **Phụ thuộc vào model lớn.** 11/13 cảnh báo `POSSIBLE_MISSING` trong v3 là lớp 1 (person); nếu guideline dự án không gán vật nhỏ/xa thì phần lớn là cờ giả, nếu có thì là thiếu nhãn thật; model không trả lời được câu hỏi này, chỉ người đọc guideline mới trả lời.
 
 ## 5. Train: raw vs clean (tùy chọn, chấm riêng)
-Chưa chạy. Phần train Colab là phần tùy chọn chấm riêng và hiện chưa thực hiện; báo cáo này không có kết quả train nào, nên không có kết luận "clean tốt hơn raw".
+Cấu hình: `yolo26n.pt`, 20 epoch, `imgsz` 640, batch 16, GPU T4 trên Colab, 2 seed (0 và 1); val = `data/gold_val` (40 ảnh), test = `data/test` (100 ảnh); mỗi lần train khoảng 90–130 giây. Dữ liệu `clean` là bản **nháp** (pipeline kết luận Hold, `manifest.json` ghi rõ). Số liệu lấy từ `submission/results/comparison.md` và các file `*_seed*.json`.
+
+| biến thể | #ảnh đưa vào | số seed | mAP50 (TB ± độ lệch) | mAP50-95 (TB ± độ lệch) | precision | recall |
+|---|---:|---:|---|---|---|---|
+| raw | 224 | 2 | 0,726 ± 0,000 | 0,512 ± 0,004 | 0,764 ± 0,061 | 0,649 ± 0,028 |
+| clean | 202 | 2 | 0,701 ± 0,025 | 0,487 ± 0,008 | 0,759 ± 0,003 | 0,625 ± 0,019 |
+
+Từng seed (mAP50): raw 0,7256 và 0,7259; clean 0,7180 và 0,6832. AP50 theo lớp (trung bình 2 seed): car 0,738 (raw) / 0,738 (clean); person 0,822 / 0,823; bus 0,695 / 0,703; **truck 0,648 / 0,538**.
+
+**Kết luận (trung thực): chưa kết luận được là `clean` tốt hơn `raw`; số liệu còn nghiêng nhẹ về `raw`.**
+- Chênh mAP50 (clean − raw) = **−0,025**, tức clean thấp hơn. Chênh này xấp xỉ 1 độ lệch chuẩn của clean (0,025) giữa 2 seed: seed 0 của clean (0,718) chỉ thấp hơn raw 0,008, seed 1 (0,683) thấp hơn 0,043. Với mAP50-95 chênh −0,024 lớn hơn cả hai độ lệch chuẩn (0,004 và 0,008), nhưng độ lệch chuẩn tính từ **chỉ 2 seed** không đáng tin (raw có hai giá trị gần như trùng nhau chỉ là ngẫu nhiên có thể xảy ra). Vì vậy mình không khẳng định raw tốt hơn clean, càng không thể nói clean tốt hơn.
+- Phần lớn chênh lệch đến từ lớp **truck** (−0,111; clean seed 0 là 0,590 còn seed 1 chỉ 0,486). Ba lớp còn lại gần như bằng nhau (chênh ≤ 0,008).
+
+**`raw` thật sự train trên bao nhiêu ảnh?** Trường `train_images = 224` trong JSON là số ảnh đưa vào, không phải số ảnh được dùng. Log Ultralytics ở ô train `raw` báo `11 corrupt` và bỏ qua 11 ảnh: `img_0010` (không mở được), `img_0014` và `img_0022` (toạ độ ngoài khoảng), `img_0020`, `img_0104`, `img_0194`, `img_0199` (id lớp 93, 7, 4, 4 ngoài 0–3), `img_0099` và `img_0117` (giá trị âm), `img_0136` (ảnh cắt cụt), `img_0179` (dòng nhãn hỏng). Vậy raw thực tế học khoảng 213 ảnh (224 − 11; mình suy ra bằng phép trừ, log ghi "216 images" nên con số chính xác có thể lệch vài ảnh). Với `clean`, log báo `202 images, 0 corrupt`.
+
+**Giả thuyết giải thích và cách kiểm:**
+1. **Truck ít mẫu nên rất nhiễu.** `class_stats.csv` của dữ liệu clean chỉ có 41 box truck (car 101, person 574, bus 32), nên AP của truck có thể nhảy hơn 0,1 giữa hai seed (0,590 → 0,486). Cách kiểm: train ≥ 5 seed, báo cáo AP theo lớp kèm độ lệch chuẩn, và đếm số box truck trong `raw` so với `clean`.
+2. **`raw` có thể được thổi phồng do rò rỉ test.** Cửa vào tìm thấy 5 ảnh `raw` trùng ảnh trong kho test (`LEAK_TEST`: `test_033`, `test_039`, `test_044`, `test_085`, `test_009`), cộng thêm 8 ảnh trùng từng byte và 4 ảnh trùng gần đúng. `raw` học thuộc những ảnh này còn `clean` đã loại chúng. Cách kiểm: đánh giá lại cả hai mô hình trên test sau khi bỏ 5 ảnh bị rò rỉ và xem khoảng cách có thu hẹp không (mình chưa làm).
+3. **Test chỉ 100 ảnh**, nên 1–2 ảnh khó cũng đủ làm mAP lệch vài phần trăm, nhất là với lớp ít mẫu.
+4. **`clean` chưa thật sự sạch.** Pipeline kết luận Hold: còn 38/202 ảnh cảnh báo chưa được duyệt, và người duyệt là mô phỏng. Để biết "dữ liệu sạch hoàn toàn" giúp được bao nhiêu cần so thêm biến thể `oracle` (nhãn người), mình chưa chạy.
 
 ## 6. Quyết định và ghi chú AI
 **(a) Quyết định cuối: Hold, không phát hành.** Để thành Release cần giảm tỉ lệ ảnh còn cảnh báo xuống dưới 10% (≤ 20/202 ảnh), tức người duyệt cần xử lý thêm khoảng 18 ảnh nữa, hoặc tăng ngân sách duyệt. Không chỉnh `gate.warn_ratio_hold`, `review.budget_images` hay ngưỡng `conf` chỉ để ép ra Release (conf cao làm tụt recall `MISSING`). Trước khi phát hành nên duyệt ưu tiên: 3 `POSSIBLE_WRONG_CLASS` (IoU 0,91–0,97, rất đáng tin: `img_0078`, `img_0083`, `img_0220`), 4 `EMPTY_LABEL`, và các `POSSIBLE_MISSING` có conf ≥ 0,7.
